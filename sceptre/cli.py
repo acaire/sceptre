@@ -22,6 +22,7 @@ import colorama
 import yaml
 from boto3.exceptions import Boto3Error
 from botocore.exceptions import BotoCoreError, ClientError
+from difflib import unified_diff
 from jinja2.exceptions import TemplateError
 
 from .config import ENVIRONMENT_CONFIG_ATTRIBUTES
@@ -503,18 +504,55 @@ def list_change_sets(ctx, environment, stack):
 
 @cli.command(name="update-stack-cs")
 @stack_options
+@click.option("--diff", is_flag=True,
+              help='Show a template/params diff in addition to the changeset')
 @click.option("--verbose", is_flag=True)
 @click.pass_context
 @catch_exceptions
-def update_with_change_set(ctx, environment, stack, verbose):
+def update_with_change_set(ctx, environment, stack, diff, verbose):
     """
     Updates the stack using a change set.
 
     Creates a change set for ENVIRONMENT/STACK, prints out a description of the
     changes, and prompts the user to decide whether to execute or delete it.
+
+    If --diff is passed, a template/params diff will be displayed with context
     """
     env = get_env(ctx.obj["sceptre_dir"], environment, ctx.obj["options"])
     change_set_name = "-".join(["change-set", uuid1().hex])
+
+    if diff:
+        new_template = env.stacks[stack].template.body
+        old_template = env.stacks[stack].get_template()['TemplateBody']
+        template_diff = get_diff(
+            old_template,
+            new_template,
+            prefix='template_')
+        print_diff(template_diff)
+
+        # Determine new params by merging with defaults
+        default_params = {
+            i['ParameterKey']: i['DefaultValue']
+            for i in env.stacks[stack].validate_template()['Parameters']
+            if 'DefaultValue' in i}
+        new_params_tmp = {}
+        new_params_tmp.update(default_params)
+        new_params_tmp.update(env.stacks[stack].parameters)
+
+        new_params = sorted(
+            ['{}={}\n'.format(k, ','.join(v) if isinstance(v, list) else v)
+             for k, v in new_params_tmp.items()])
+        # Handle stacks with no params
+        try:
+            raw_stack_params = env.stacks[stack].describe()['Stacks'][0]['Parameters']
+        except KeyError:
+            raw_stack_params = []
+        old_params = sorted(
+            ['{}={}\n'.format(i['ParameterKey'], i['ParameterValue'])
+             for i in raw_stack_params])
+        params_diff = get_diff(old_params, new_params, prefix='params_')
+        print_diff(params_diff)
+
     with change_set(env.stacks[stack], change_set_name):
         status = env.stacks[stack].wait_for_cs_completion(change_set_name)
         description = env.stacks[stack].describe_change_set(change_set_name)
@@ -870,6 +908,14 @@ def write(var, output_format="str", no_colour=True):
 
     click.echo(stream)
 
+def print_diff(diff):
+    for line in diff:
+        if line.startswith('+'):
+            click.secho(line, fg='green', nl=False)
+        elif line.startswith('-'):
+            click.secho(line, fg='red', nl=False)
+        else:
+            click.echo(line, nl=False)
 
 def _remove_response_metadata(response):
     """
@@ -884,6 +930,21 @@ def _remove_response_metadata(response):
     if "ResponseMetadata" in response:
         del response['ResponseMetadata']
     return response
+
+def get_diff(s1, s2, prefix):
+    before = prefix + 'before'
+    after = prefix + 'after'
+    if isinstance(s1, str):
+        s1 = s1.splitlines(keepends=True)
+    if isinstance(s2, str):
+        s2 = s2.splitlines(keepends=True)
+
+    diff = unified_diff(
+        s1,
+        s2,
+        fromfile=before,
+        tofile=after)
+    return diff
 
 
 class ColouredFormatter(Formatter):

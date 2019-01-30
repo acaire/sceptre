@@ -436,6 +436,21 @@ class Stack(object):
 
         return response["Stacks"][0].get("Outputs", [])
 
+    def get_template(self):
+        """
+        Returns the stack template body.
+
+        :returns: The stack template body.
+        :rtype: dict
+        """
+        self.logger.debug("%s - Getting stack template", self.name)
+        response = self.connection_manager.call(
+            service="cloudformation",
+            command="get_template",
+            kwargs={"StackName": self.external_name}
+        )
+        return response
+
     def continue_update_rollback(self):
         """
         Rolls back a stack in the UPDATE_ROLLBACK_FAILED state to
