@@ -441,11 +441,28 @@ class StackActions(object):
         :param change_set_name: The name of the Change Set.
         :type change_set_name: str
         """
+
+        # Check to see if the stack exists so
+        # we know whether to use create or update
+        try:
+            status = self._get_status()
+            if status == 'REVIEW_IN_PROGRESS':
+                change_set_type = 'CREATE'
+            else:
+                change_set_type = 'UPDATE'
+        except StackDoesNotExistError:
+            change_set_type = 'CREATE'
+
+        self.logger.debug(
+            "%s - change set type set to '%s'", self.stack.name, change_set_type
+        )
+
         create_change_set_kwargs = {
             "StackName": self.stack.external_name,
             "Parameters": self._format_parameters(self.stack.parameters),
             "Capabilities": ['CAPABILITY_IAM', 'CAPABILITY_NAMED_IAM', 'CAPABILITY_AUTO_EXPAND'],
             "ChangeSetName": change_set_name,
+            "ChangeSetType": change_set_type,
             "NotificationARNs": self.stack.notifications,
             "Tags": [
                 {"Key": str(k), "Value": str(v)}
